@@ -16,6 +16,14 @@ export function ProductsPageClient() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [editProductId, setEditProductId] = useState<string | null>(null);
 
+  async function loadCategories() {
+    const res = await supabase
+      .from("categories")
+      .select("id,name")
+      .order("sort_order", { ascending: true });
+    setCategories(res.data ?? []);
+  }
+
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -29,6 +37,20 @@ export function ProductsPageClient() {
     return () => {
       alive = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("admin-products-categories-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "categories" }, () =>
+        void loadCategories()
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const searchPlaceholder = useMemo(() => {

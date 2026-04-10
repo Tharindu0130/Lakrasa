@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SalesOverview } from "./SalesOverview";
+import { RecentOrdersLive } from "./RecentOrdersLive";
 
 export const metadata: Metadata = {
   title: "Executive Dashboard",
@@ -207,7 +208,7 @@ export default function AdminDashboardPage() {
         <aside className="hidden h-full w-80 shrink-0 bg-[#f1f5ef] lg:flex lg:flex-col">
           <div className="px-7 pt-10 pb-6 flex items-center justify-center">
             <img
-              src="/lakshara-logo.svg"
+              src="/Lakshara.logo.svg"
               alt="Lakshara"
               className="h-16 w-auto max-w-[260px] object-contain"
             />
@@ -333,78 +334,7 @@ export default function AdminDashboardPage() {
                 </a>
               </div>
 
-              <div className="mt-5 rounded-3xl bg-white/70 p-5">
-                <div className="grid grid-cols-5 gap-3 px-3 py-2 text-[10px] tracking-[0.2em] uppercase opacity-60">
-                  <div>Order ID</div>
-                  <div>Date</div>
-                  <div>Customer</div>
-                  <div>Status</div>
-                  <div className="text-right">Total</div>
-                </div>
-
-                <div className="mt-3 space-y-3">
-                  {[
-                    {
-                      id: "#LC-9021",
-                      date: "Oct 12, 2023",
-                      customer: "Anura Silva",
-                      initials: "AS",
-                      status: "Delivered",
-                      statusTone: "bg-[#bdef86]/70 text-[#002521]",
-                      total: "$240.00",
-                    },
-                    {
-                      id: "#LC-9022",
-                      date: "Oct 12, 2023",
-                      customer: "Kasun Mendis",
-                      initials: "KM",
-                      status: "Shipped",
-                      statusTone: "bg-[#e3eb36]/40 text-[#1c1d00]",
-                      total: "$115.50",
-                    },
-                    {
-                      id: "#LC-9023",
-                      date: "Oct 11, 2023",
-                      customer: "Dilini Rodrigo",
-                      initials: "DR",
-                      status: "Pending",
-                      statusTone: "bg-[#e6e9e3] text-[#404847]",
-                      total: "$89.99",
-                    },
-                  ].map((row) => (
-                    <div
-                      key={row.id}
-                      className="rounded-2xl bg-white/55 px-3 py-3"
-                    >
-                      <div className="grid grid-cols-5 items-center gap-3">
-                        <div className="text-sm font-semibold">{row.id}</div>
-                        <div className="text-sm opacity-80">{row.date}</div>
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#f1f5ef] text-xs font-semibold">
-                            {row.initials}
-                          </div>
-                          <div className="truncate text-sm opacity-90">
-                            {row.customer}
-                          </div>
-                        </div>
-                        <div>
-                          <span
-                            className={[
-                              "inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold",
-                              row.statusTone,
-                            ].join(" ")}
-                          >
-                            {row.status}
-                          </span>
-                        </div>
-                        <div className="text-right text-sm font-semibold tabular-nums">
-                          {row.total}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <RecentOrdersLive />
             </div>
 
             <div className="lg:col-span-4">

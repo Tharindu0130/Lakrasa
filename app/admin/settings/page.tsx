@@ -188,7 +188,7 @@ export default function AdminSettingsPage() {
         <aside className="hidden h-full w-80 shrink-0 bg-[#f1f5ef] lg:flex lg:flex-col">
           <div className="px-7 pt-10 pb-6 flex items-center justify-center">
             <img
-              src="/lakshara-logo.svg"
+              src="/Lakshara.logo.svg"
               alt="Lakshara"
               className="h-16 w-auto max-w-[260px] object-contain"
             />

@@ -170,7 +170,7 @@ export default function AdminProductsItemsPage() {
           <div className="px-7 pt-10 pb-6 flex items-center justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/lakshara-logo.svg"
+              src="/Lakshara.logo.svg"
               alt="Lakshara"
               className="h-16 w-auto max-w-[260px] object-contain"
             />

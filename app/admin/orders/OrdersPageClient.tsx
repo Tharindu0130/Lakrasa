@@ -91,6 +91,33 @@ type Order = {
   progress?: number;
 };
 
+type OrderItem = {
+  id: string;
+  productId: string;
+  title: string;
+  sku: string;
+  quantity: number;
+  unitPrice: number | null;
+  internalName: string;
+  priceUsd: number | null;
+  stockStatus: string;
+  stockQuantity: number | null;
+  weightKg: number | null;
+  dimensions: { length: number | null; width: number | null; height: number | null };
+  shippingClass: string;
+  freeShipping: boolean | null;
+};
+
+type CheckoutAddress = {
+  firstName: string;
+  lastName: string;
+  addressLine: string;
+  apartmentSuite: string;
+  city: string;
+  postalCode: string;
+  phoneNumber: string;
+};
+
 function formatOrderDisplayId(uuid: string) {
   return `#ORD-${uuid.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 }
@@ -384,7 +411,7 @@ function FiltersIcon() {
   );
 }
 
-function OrdersTable({ rows }: { rows: Order[] }) {
+function OrdersTable({ rows, onView }: { rows: Order[]; onView: (orderId: string) => void }) {
   return (
     <div className="rounded-3xl bg-white/70 p-4 shadow-[0_30px_70px_rgba(0,37,33,0.06)]">
       <div className="overflow-x-auto">
@@ -402,8 +429,9 @@ function OrdersTable({ rows }: { rows: Order[] }) {
               <th className="px-3 py-3">Customer</th>
               <th className="px-3 py-3">Total</th>
               <th className="px-3 py-3">Stage</th>
-              <th className="px-3 py-3">Created date</th>
-              <th className="px-3 py-3">Closed date</th>
+              <th className="px-3 py-3">Received date</th>
+              <th className="px-3 py-3">Delivered date</th>
+              <th className="px-3 py-3">View</th>
               <th className="w-12 px-3 py-3 text-right"> </th>
             </tr>
           </thead>
@@ -438,6 +466,16 @@ function OrdersTable({ rows }: { rows: Order[] }) {
                 <td className="border-t border-black/10 px-3 py-4 opacity-80">
                   {r.closedDate ?? "—"}
                 </td>
+                <td className="border-t border-black/10 px-3 py-4">
+                  <button
+                    type="button"
+                    onClick={() => onView(r.id)}
+                    className="rounded-2xl bg-white/60 px-4 py-2 text-sm font-semibold hover:bg-white/85"
+                    aria-label={`View ${r.displayId}`}
+                  >
+                    View
+                  </button>
+                </td>
                 <td className="border-t border-black/10 px-3 py-4 text-right">
                   <KebabButton />
                 </td>
@@ -461,8 +499,29 @@ export function OrdersPageClient() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<OrderStage | null>(null);
   const [detailsOrderId, setDetailsOrderId] = useState<string | null>(null);
-  const [detailsTab, setDetailsTab] = useState<"details" | "contacts" | "notes">("details");
+  const [detailsTab, setDetailsTab] = useState<"details" | "address" | "billing" | "notes">(
+    "details"
+  );
+  const [detailsRow, setDetailsRow] = useState<Record<string, unknown> | null>(null);
+  const [detailsCheckoutId, setDetailsCheckoutId] = useState<string | null>(null);
+  const [detailsCheckoutAddress, setDetailsCheckoutAddress] = useState<CheckoutAddress | null>(null);
+  const [detailsCheckoutBilling, setDetailsCheckoutBilling] = useState<CheckoutAddress | null>(null);
+  const [detailsItems, setDetailsItems] = useState<OrderItem[]>([]);
+  const [detailsItemsLoading, setDetailsItemsLoading] = useState(false);
+  const [detailsItemsError, setDetailsItemsError] = useState<string | null>(null);
   const draggingOrderIdRef = useRef<string | null>(null);
+
+  const closeDetails = useCallback(() => {
+    setDetailsOrderId(null);
+    setDetailsTab("details");
+    setDetailsRow(null);
+    setDetailsCheckoutId(null);
+    setDetailsCheckoutAddress(null);
+    setDetailsCheckoutBilling(null);
+    setDetailsItems([]);
+    setDetailsItemsError(null);
+    setDetailsItemsLoading(false);
+  }, []);
 
   const loadOrders = useCallback(async (opts?: { quiet?: boolean }) => {
     setOrdersError(null);
@@ -484,7 +543,8 @@ export function OrdersPageClient() {
   }, []);
 
   useEffect(() => {
-    void loadOrders();
+    // Defer to avoid "setState-in-effect" lint rule.
+    queueMicrotask(() => void loadOrders());
   }, [loadOrders]);
 
   useEffect(() => {
@@ -589,13 +649,326 @@ export function OrdersPageClient() {
     : null;
 
   useEffect(() => {
+    if (!detailsOrderId) return;
+
+    let cancelled = false;
+    (async () => {
+      const res = await supabase.from("orders").select("*").eq("id", detailsOrderId).single();
+      if (cancelled) return;
+      setDetailsRow((res.data as Record<string, unknown> | null) ?? null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detailsOrderId]);
+
+  const loadCheckout = useCallback(async (orderId: string) => {
+    const res = (await supabase
+      .from("checkout")
+      .select(
+        "id, order_id, checkout_address(first_name,last_name,address_line,apartment_suite,city,postal_code,phone_number), checkout_billing(first_name,last_name,address_line,apartment_suite,city,postal_code,phone_number)"
+      )
+      .eq("order_id", orderId)
+      .single()) as {
+      data:
+        | {
+            id: string;
+            order_id: string;
+            checkout_address:
+              | {
+                  first_name: string;
+                  last_name: string;
+                  address_line: string;
+                  apartment_suite: string;
+                  city: string;
+                  postal_code: string;
+                  phone_number: string;
+                }
+              | null;
+            checkout_billing:
+              | {
+                  first_name: string;
+                  last_name: string;
+                  address_line: string;
+                  apartment_suite: string;
+                  city: string;
+                  postal_code: string;
+                  phone_number: string;
+                }
+              | null;
+          }
+        | null;
+      error: { message: string } | null;
+    };
+
+    if (res.error || !res.data) {
+      setDetailsCheckoutId(null);
+      setDetailsCheckoutAddress(null);
+      setDetailsCheckoutBilling(null);
+      return;
+    }
+
+    setDetailsCheckoutId(res.data.id);
+    setDetailsCheckoutAddress(
+      res.data.checkout_address
+        ? {
+            firstName: res.data.checkout_address.first_name ?? "",
+            lastName: res.data.checkout_address.last_name ?? "",
+            addressLine: res.data.checkout_address.address_line ?? "",
+            apartmentSuite: res.data.checkout_address.apartment_suite ?? "",
+            city: res.data.checkout_address.city ?? "",
+            postalCode: res.data.checkout_address.postal_code ?? "",
+            phoneNumber: res.data.checkout_address.phone_number ?? "",
+          }
+        : null
+    );
+    setDetailsCheckoutBilling(
+      res.data.checkout_billing
+        ? {
+            firstName: res.data.checkout_billing.first_name ?? "",
+            lastName: res.data.checkout_billing.last_name ?? "",
+            addressLine: res.data.checkout_billing.address_line ?? "",
+            apartmentSuite: res.data.checkout_billing.apartment_suite ?? "",
+            city: res.data.checkout_billing.city ?? "",
+            postalCode: res.data.checkout_billing.postal_code ?? "",
+            phoneNumber: res.data.checkout_billing.phone_number ?? "",
+          }
+        : null
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!detailsOrderId) return;
+    queueMicrotask(() => void loadCheckout(detailsOrderId));
+  }, [detailsOrderId, loadCheckout]);
+
+  useEffect(() => {
+    if (!detailsOrderId) return;
+    const channel = supabase
+      .channel(`admin-checkout-live-${detailsOrderId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "checkout" },
+        () => void loadCheckout(detailsOrderId)
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "checkout_address" },
+        () => void loadCheckout(detailsOrderId)
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "checkout_billing" },
+        () => void loadCheckout(detailsOrderId)
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [detailsOrderId, loadCheckout]);
+
+  const loadDetailsItems = useCallback(async (orderId: string) => {
+    setDetailsItemsError(null);
+    setDetailsItemsLoading(true);
+
+    const safeNum = (v: unknown) => {
+      if (typeof v === "number") return v;
+      if (typeof v === "string" && v.trim() && !Number.isNaN(Number(v))) return Number(v);
+      return null;
+    };
+
+    const safeStr = (v: unknown) => (typeof v === "string" ? v : "");
+
+    const itemsQuery = supabase.from("order_items").select("*");
+    const itemsRes = ((detailsCheckoutId
+      ? await itemsQuery.or(`checkout_id.eq.${detailsCheckoutId},order_id.eq.${orderId}`)
+      : await itemsQuery.eq("order_id", orderId)) as unknown) as {
+      data: Record<string, unknown>[] | null;
+      error: { message: string } | null;
+    };
+    if (itemsRes.error) {
+      setDetailsItems([]);
+      setDetailsItemsLoading(false);
+      setDetailsItemsError(itemsRes.error.message);
+      return;
+    }
+
+    const rawRows = itemsRes.data ?? [];
+    const productIds = Array.from(
+      new Set(
+        rawRows
+          .map((r) => safeStr(r.product_id || r.productId || r.product))
+          .filter((id) => id)
+      )
+    );
+
+    const productsRes =
+      productIds.length === 0
+        ? ({ data: [], error: null } as {
+            data: Array<{
+              id: string;
+              title: string;
+              internal_name: string;
+              sku: string;
+              price_lkr: number | string;
+              price_usd: number | string | null;
+              stock_status: string;
+              stock_quantity: number | null;
+              weight_kg: number | string | null;
+              length: number | string | null;
+              width: number | string | null;
+              height: number | string | null;
+              shipping_class: string;
+              free_shipping: boolean;
+            }>;
+            error: { message: string } | null;
+          })
+        : ((await supabase
+            .from("products")
+            .select(
+              "id,title,internal_name,sku,price_lkr,price_usd,stock_status,stock_quantity,weight_kg,length,width,height,shipping_class,free_shipping"
+            )
+            .in("id", productIds)) as {
+            data:
+              | Array<{
+                  id: string;
+                  title: string;
+                  internal_name: string;
+                  sku: string;
+                  price_lkr: number | string;
+                  price_usd: number | string | null;
+                  stock_status: string;
+                  stock_quantity: number | null;
+                  weight_kg: number | string | null;
+                  length: number | string | null;
+                  width: number | string | null;
+                  height: number | string | null;
+                  shipping_class: string;
+                  free_shipping: boolean;
+                }>
+              | null;
+            error: { message: string } | null;
+          });
+
+    if (productsRes.error) {
+      setDetailsItems([]);
+      setDetailsItemsLoading(false);
+      setDetailsItemsError(productsRes.error.message);
+      return;
+    }
+
+    const products = productsRes.data ?? [];
+    const byId = new Map(products.map((p) => [p.id, p]));
+
+    const mapped: OrderItem[] = rawRows.map((r, idx) => {
+      const productId = safeStr(r.product_id || r.productId || r.product);
+      const p = byId.get(productId);
+      const quantity =
+        safeNum(r.quantity ?? r.qty ?? r.count ?? 1) ?? 1;
+      const unitPrice =
+        safeNum(r.unit_price ?? r.unitPrice ?? r.price) ??
+        (p ? Number(p.price_lkr) : null);
+      return {
+        id: safeStr(r.id) || `${orderId}-${productId || "item"}-${idx}`,
+        productId,
+        title: p?.title ?? safeStr(r.title) ?? "Unknown item",
+        sku: p?.sku ?? safeStr(r.sku),
+        quantity,
+        unitPrice,
+        internalName: p?.internal_name ?? safeStr(r.internal_name ?? r.internalName),
+        priceUsd: p ? safeNum(p.price_usd) : null,
+        stockStatus: p?.stock_status ?? safeStr(r.stock_status ?? r.stockStatus),
+        stockQuantity: p ? safeNum(p.stock_quantity) : null,
+        weightKg: p ? safeNum(p.weight_kg) : null,
+        dimensions: {
+          length: p ? safeNum(p.length) : null,
+          width: p ? safeNum(p.width) : null,
+          height: p ? safeNum(p.height) : null,
+        },
+        shippingClass: p?.shipping_class ?? safeStr(r.shipping_class ?? r.shippingClass),
+        freeShipping: p ? Boolean(p.free_shipping) : null,
+      };
+    });
+
+    setDetailsItems(mapped);
+    setDetailsItemsLoading(false);
+  }, [detailsCheckoutId]);
+
+  useEffect(() => {
+    if (!detailsOrderId) return;
+    // Defer to avoid "setState-in-effect" lint rule.
+    queueMicrotask(() => void loadDetailsItems(detailsOrderId));
+  }, [detailsOrderId, loadDetailsItems]);
+
+  useEffect(() => {
+    if (!detailsOrderId) return;
+    const channel = supabase
+      .channel(`admin-order-details-${detailsOrderId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "order_items" },
+        () => void loadDetailsItems(detailsOrderId)
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "products" },
+        () => void loadDetailsItems(detailsOrderId)
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [detailsOrderId, loadDetailsItems]);
+
+  const address = useMemo(() => {
+    if (detailsCheckoutAddress) return detailsCheckoutAddress;
+    const r = detailsRow ?? {};
+    const get = (k: string) => {
+      const v = r[k];
+      return typeof v === "string" && v.trim() ? v.trim() : "";
+    };
+
+    return {
+      firstName: get("shipping_first_name"),
+      lastName: get("shipping_last_name"),
+      addressLine: get("shipping_address_line"),
+      apartmentSuite: get("shipping_apartment"),
+      city: get("shipping_city"),
+      postalCode: get("shipping_postal_code"),
+      phoneNumber: get("shipping_phone"),
+    };
+  }, [detailsRow, detailsCheckoutAddress]);
+
+  const billing = useMemo(() => {
+    if (detailsCheckoutBilling) return detailsCheckoutBilling;
+    const r = detailsRow ?? {};
+    const get = (k: string) => {
+      const v = r[k];
+      return typeof v === "string" && v.trim() ? v.trim() : "";
+    };
+
+    return {
+      firstName: get("billing_first_name"),
+      lastName: get("billing_last_name"),
+      addressLine: get("billing_address_line"),
+      apartmentSuite: get("billing_apartment"),
+      city: get("billing_city"),
+      postalCode: get("billing_postal_code"),
+      phoneNumber: get("billing_phone"),
+    };
+  }, [detailsRow, detailsCheckoutBilling]);
+
+  useEffect(() => {
     if (!selected) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDetailsOrderId(null);
+      if (e.key === "Escape") closeDetails();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selected]);
+  }, [selected, closeDetails]);
 
   return (
     <>
@@ -852,7 +1225,13 @@ export function OrdersPageClient() {
             </KanbanColumn>
           </div>
         ) : (
-          <OrdersTable rows={filtered} />
+          <OrdersTable
+            rows={filtered}
+            onView={(orderId) => {
+              setDetailsTab("details");
+              setDetailsOrderId(orderId);
+            }}
+          />
         )}
       </main>
 
@@ -862,7 +1241,7 @@ export function OrdersPageClient() {
             type="button"
             className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px]"
             aria-label="Close order details"
-            onClick={() => setDetailsOrderId(null)}
+            onClick={closeDetails}
           />
 
           <aside
@@ -881,7 +1260,7 @@ export function OrdersPageClient() {
                   type="button"
                   className="grid h-10 w-10 place-items-center rounded-2xl hover:bg-black/[0.04]"
                   aria-label="Back"
-                  onClick={() => setDetailsOrderId(null)}
+                  onClick={closeDetails}
                 >
                   <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
                     <path
@@ -919,7 +1298,8 @@ export function OrdersPageClient() {
                 {(
                   [
                     { key: "details" as const, label: "Details" },
-                    { key: "contacts" as const, label: "Contacts" },
+                    { key: "address" as const, label: "Address" },
+                    { key: "billing" as const, label: "Billing" },
                     { key: "notes" as const, label: "Notes" },
                   ] as const
                 ).map((t) => {
@@ -948,68 +1328,214 @@ export function OrdersPageClient() {
 
             <div className="px-6 py-5">
               {detailsTab === "details" ? (
-                <div className="rounded-3xl bg-[#f7faf4] p-5">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="text-sm font-semibold">Order Details</div>
-                    <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold text-[#033c37]">
-                      <span aria-hidden="true">✎</span> Edit
-                    </button>
+                <div className="space-y-4">
+                  <div className="rounded-3xl bg-[#f7faf4] p-5">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="text-sm font-semibold">Order Details</div>
+                    </div>
+
+                    <div className="mt-5 space-y-4 text-sm">
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="opacity-70">Order Amount</span>
+                        <span className="font-semibold tabular-nums">
+                          <Money value={selected.total} />
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="opacity-70">Order Stage</span>
+                        <span className="font-semibold">{selected.stage}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="opacity-70">Status</span>
+                        <span className="font-semibold">{selected.status?.label ?? "—"}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="opacity-70">Tag</span>
+                        <span className="font-semibold">{selected.tag?.label ?? "—"}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="opacity-70">Created Date</span>
+                        <span className="font-semibold">{selected.createdDate}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="opacity-70">Closed Date</span>
+                        <span className="font-semibold">{selected.closedDate ?? "—"}</span>
+                      </div>
+
+                      {typeof selected.progress === "number" ? (
+                        <div className="pt-2">
+                          <div className="flex items-center justify-between gap-4 text-xs opacity-70">
+                            <span>Progress</span>
+                            <span className="tabular-nums">{Math.round(selected.progress)}%</span>
+                          </div>
+                          <div className="mt-2 h-2 w-full rounded-full bg-black/10">
+                            <div
+                              className="h-2 rounded-full bg-[#bdef86]"
+                              style={{ width: `${Math.max(0, Math.min(100, selected.progress))}%` }}
+                              aria-hidden="true"
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
-                  <div className="mt-5 space-y-4 text-sm">
+                  <div className="rounded-3xl bg-[#f7faf4] p-5">
                     <div className="flex items-center justify-between gap-4">
-                      <span className="opacity-70">Order Amount</span>
-                      <span className="font-semibold tabular-nums">
-                        <Money value={selected.total} />
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <span className="opacity-70">Order Stage</span>
-                      <span className="font-semibold">{selected.stage}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <span className="opacity-70">Status</span>
-                      <span className="font-semibold">{selected.status?.label ?? "—"}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <span className="opacity-70">Tag</span>
-                      <span className="font-semibold">{selected.tag?.label ?? "—"}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <span className="opacity-70">Created Date</span>
-                      <span className="font-semibold">{selected.createdDate}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <span className="opacity-70">Closed Date</span>
-                      <span className="font-semibold">{selected.closedDate ?? "—"}</span>
+                      <div className="text-sm font-semibold">Items / Products</div>
+                      <div className="text-xs opacity-60 tabular-nums">
+                        {detailsItemsLoading ? "Loading…" : `${detailsItems.length} item${detailsItems.length === 1 ? "" : "s"}`}
+                      </div>
                     </div>
 
-                    {typeof selected.progress === "number" ? (
-                      <div className="pt-2">
-                        <div className="flex items-center justify-between gap-4 text-xs opacity-70">
-                          <span>Progress</span>
-                          <span className="tabular-nums">{Math.round(selected.progress)}%</span>
-                        </div>
-                        <div className="mt-2 h-2 w-full rounded-full bg-black/10">
-                          <div
-                            className="h-2 rounded-full bg-[#bdef86]"
-                            style={{ width: `${Math.max(0, Math.min(100, selected.progress))}%` }}
-                            aria-hidden="true"
-                          />
-                        </div>
+                    {detailsItemsError ? (
+                      <div className="mt-4 rounded-2xl bg-white/60 px-4 py-3 text-sm">
+                        <div className="font-semibold text-[#7a1c1c]">Couldn’t load items</div>
+                        <div className="mt-1 opacity-70">{detailsItemsError}</div>
                       </div>
-                    ) : null}
+                    ) : detailsItemsLoading ? (
+                      <div className="mt-4 text-sm opacity-70">Loading items…</div>
+                    ) : detailsItems.length === 0 ? (
+                      <div className="mt-4 text-sm opacity-70">No items found for this order.</div>
+                    ) : (
+                      <div className="mt-4 space-y-3">
+                        {detailsItems.map((it) => (
+                          <div
+                            key={it.id}
+                            className="rounded-2xl bg-white/60 px-4 py-3"
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold">{it.title}</div>
+                                <div className="mt-1 text-xs opacity-70 space-y-1">
+                                  <div>{it.sku ? <>SKU: {it.sku}</> : <span>SKU: —</span>}</div>
+                                  {it.internalName ? (
+                                    <div className="truncate">Internal: {it.internalName}</div>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-right text-sm">
+                                <div className="font-semibold tabular-nums">× {it.quantity}</div>
+                                <div className="mt-1 text-xs opacity-70 tabular-nums">
+                                  {typeof it.unitPrice === "number" ? (
+                                    <Money value={it.unitPrice} />
+                                  ) : (
+                                    "—"
+                                  )}
+                                </div>
+                                {typeof it.priceUsd === "number" ? (
+                                  <div className="mt-1 text-[11px] opacity-60 tabular-nums">
+                                    USD {it.priceUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] opacity-70">
+                              <div className="flex items-center justify-between gap-3">
+                                <span>Weight</span>
+                                <span className="font-semibold tabular-nums opacity-90">
+                                  {typeof it.weightKg === "number" ? `${it.weightKg} kg` : "—"}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span>Dimensions</span>
+                                <span className="font-semibold tabular-nums opacity-90">
+                                  {typeof it.dimensions.length === "number" ||
+                                  typeof it.dimensions.width === "number" ||
+                                  typeof it.dimensions.height === "number"
+                                    ? `${it.dimensions.length ?? "—"}×${it.dimensions.width ?? "—"}×${it.dimensions.height ?? "—"}`
+                                    : "—"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="mt-2 flex items-center justify-between text-xs opacity-70">
+                              <span>Line total</span>
+                              <span className="font-semibold tabular-nums">
+                                {typeof it.unitPrice === "number" ? (
+                                  <Money value={it.unitPrice * it.quantity} />
+                                ) : (
+                                  "—"
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : null}
 
-              {detailsTab === "contacts" ? (
+              {detailsTab === "address" ? (
                 <div className="rounded-3xl bg-[#f7faf4] p-5 text-sm">
-                  <div className="text-sm font-semibold">Contacts</div>
-                  <div className="mt-4 space-y-3 opacity-75">
-                    <div>Email: {selected.email || "—"}</div>
-                    <div>Phone: —</div>
-                    <div>Address: —</div>
+                  <div className="text-sm font-semibold">Address Details</div>
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">First Name</span>
+                      <span className="font-semibold">{address.firstName || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Last Name</span>
+                      <span className="font-semibold">{address.lastName || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Address Line</span>
+                      <span className="font-semibold text-right">{address.addressLine || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Apartment/Suite</span>
+                      <span className="font-semibold text-right">{address.apartmentSuite || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">City</span>
+                      <span className="font-semibold">{address.city || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Postal Code</span>
+                      <span className="font-semibold tabular-nums">{address.postalCode || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Phone Number</span>
+                      <span className="font-semibold tabular-nums">{address.phoneNumber || "—"}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {detailsTab === "billing" ? (
+                <div className="rounded-3xl bg-[#f7faf4] p-5 text-sm">
+                  <div className="text-sm font-semibold">Billing Details</div>
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">First Name</span>
+                      <span className="font-semibold">{billing.firstName || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Last Name</span>
+                      <span className="font-semibold">{billing.lastName || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Address Line</span>
+                      <span className="font-semibold text-right">{billing.addressLine || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Apartment/Suite</span>
+                      <span className="font-semibold text-right">{billing.apartmentSuite || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">City</span>
+                      <span className="font-semibold">{billing.city || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Postal Code</span>
+                      <span className="font-semibold tabular-nums">{billing.postalCode || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="opacity-70">Phone Number</span>
+                      <span className="font-semibold tabular-nums">{billing.phoneNumber || "—"}</span>
+                    </div>
                   </div>
                 </div>
               ) : null}

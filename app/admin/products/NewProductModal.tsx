@@ -65,13 +65,6 @@ function toNumber(v: string) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseList(v: string) {
-  return v
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 function LabeledField({
   label,
   children,
@@ -306,57 +299,6 @@ export function NewProductModal({
                           <option value="backorder">Backorder</option>
                         </select>
                       </LabeledField>
-                    </div>
-
-                    <div className="mt-5 rounded-3xl bg-white/55 px-5 py-5">
-                      <div className="text-sm font-semibold">Product links</div>
-                      <div className="mt-4 space-y-4">
-                        <LabeledField label="Related products (comma separated)">
-                          <input
-                            value={draft.product_links.related_products.join(", ")}
-                            onChange={(e) =>
-                              setDraft((d) => ({
-                                ...d,
-                                product_links: {
-                                  ...d.product_links,
-                                  related_products: parseList(e.target.value),
-                                },
-                              }))
-                            }
-                            className="w-full rounded-2xl bg-white/70 px-4 py-3 text-sm outline-none"
-                          />
-                        </LabeledField>
-                        <LabeledField label="Upsell products (comma separated)">
-                          <input
-                            value={draft.product_links.upsell_products.join(", ")}
-                            onChange={(e) =>
-                              setDraft((d) => ({
-                                ...d,
-                                product_links: {
-                                  ...d.product_links,
-                                  upsell_products: parseList(e.target.value),
-                                },
-                              }))
-                            }
-                            className="w-full rounded-2xl bg-white/70 px-4 py-3 text-sm outline-none"
-                          />
-                        </LabeledField>
-                        <LabeledField label="Recommended products (comma separated)">
-                          <input
-                            value={draft.product_links.recommended_products.join(", ")}
-                            onChange={(e) =>
-                              setDraft((d) => ({
-                                ...d,
-                                product_links: {
-                                  ...d.product_links,
-                                  recommended_products: parseList(e.target.value),
-                                },
-                              }))
-                            }
-                            className="w-full rounded-2xl bg-white/70 px-4 py-3 text-sm outline-none"
-                          />
-                        </LabeledField>
-                      </div>
                     </div>
                   </div>
 
@@ -604,44 +546,6 @@ export function NewProductModal({
                               className="w-full rounded-2xl bg-white/70 px-4 py-3 text-sm outline-none tabular-nums"
                             />
                           </LabeledField>
-                          <LabeledField label="Increment">
-                            <input
-                              inputMode="numeric"
-                              value={String(draft.order_limits.increment)}
-                              onChange={(e) =>
-                                setDraft((d) => ({
-                                  ...d,
-                                  order_limits: {
-                                    ...d.order_limits,
-                                    increment: toNumber(e.target.value),
-                                  },
-                                }))
-                              }
-                              className="w-full rounded-2xl bg-white/70 px-4 py-3 text-sm outline-none tabular-nums"
-                            />
-                          </LabeledField>
-                          <div className="pt-6">
-                            <div className="text-[10px] tracking-[0.2em] uppercase opacity-70">
-                              Allow backorder
-                            </div>
-                            <label className="mt-2 flex items-center justify-between rounded-2xl bg-white/60 px-4 py-3 text-sm">
-                              <span className="opacity-80">Permit pre‑orders</span>
-                              <input
-                                type="checkbox"
-                                checked={draft.order_limits.allow_backorder}
-                                onChange={(e) =>
-                                  setDraft((d) => ({
-                                    ...d,
-                                    order_limits: {
-                                      ...d.order_limits,
-                                      allow_backorder: e.target.checked,
-                                    },
-                                  }))
-                                }
-                                className="h-4 w-4 accent-[#033c37]"
-                              />
-                            </label>
-                          </div>
                         </div>
 
                       </div>
