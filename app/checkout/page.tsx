@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
-import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Swal from "sweetalert2";
@@ -11,7 +10,6 @@ import {
   ShoppingBag,
   ChevronDown,
   ChevronRight,
-  MessageSquare,
   ShieldCheck,
   Truck,
   Gift,
@@ -22,10 +20,10 @@ import {
   Check,
 } from "lucide-react";
 import Link from "next/link";
-import { readCart, writeCart, CartItem } from "@/lib/cart-storage";
+import { readCart, CartItem } from "@/lib/cart-storage";
 import { useCheckoutStore } from "@/lib/checkout-store";
 import { calculateShipping } from "@/lib/shipping";
-import { createTrackingForOrder } from "@/lib/tracking";
+import { writePendingPayment, type PendingPaymentData } from "@/lib/pending-payment";
 
 const getShippingOptionKey = (
   option: {
@@ -52,7 +50,6 @@ export default function CheckoutPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [guestEmail, setGuestEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(1);
 
   // Checkout store
   const {
@@ -63,7 +60,6 @@ export default function CheckoutPage() {
     billing,
     setBilling,
     sameAsDelivery,
-    setSameAsDelivery,
     shippingOptions,
     selectedShipping,
     setShippingOptions,
@@ -78,12 +74,6 @@ export default function CheckoutPage() {
 
   const [showAddOns, setShowAddOns] = useState(false);
   const [shippingLoading, setShippingLoading] = useState(false);
-  const [orderComplete, setOrderComplete] = useState<{
-    orderId: string;
-    trackingCode: string;
-    totalAmount: number;
-    itemCount: number;
-  } | null>(null);
 
   // Load cart and autofill user data
   useEffect(() => {
@@ -199,6 +189,33 @@ export default function CheckoutPage() {
     return true;
   };
 
+  const validateContact = () => {
+    if (user) return true;
+
+    if (!guestEmail.trim()) {
+      Swal.fire({
+        icon: "warning",
+        title: "Missing Information",
+        text: "Email address is required",
+        confirmButtonColor: "#15803d",
+      });
+      return false;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(guestEmail.trim())) {
+      Swal.fire({
+        icon: "error",
+        title: "Invalid Email",
+        text: "Please enter a valid email address",
+        confirmButtonColor: "#15803d",
+      });
+      return false;
+    }
+
+    return true;
+  };
+
   const validateGift = () => {
     if (includeMessage) {
       if (!giftDetails.senderName.trim()) {
@@ -241,202 +258,61 @@ export default function CheckoutPage() {
     return true;
   };
 
-  const handleSubmit = async () => {
+  const handleProceedToPayment = async () => {
     if (cart.length === 0) return;
+    if (!validateContact()) return;
     if (!validateDelivery()) return;
     if (!validateGift()) return;
 
     setLoading(true);
 
     try {
-      const isGuest = !user;
-      const guestId = isGuest
-        ? `GUEST-${Math.random().toString(36).substring(2, 9).toUpperCase()}-${delivery.shippingPhone}`
-        : null;
-
-      // TODO: Integrate PayHere payment
-      // For now, simulate payment
-      console.log("Processing PayHere payment...");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      // Calculate total weight
-      const totalWeight = cart.reduce((sum, item) => {
-        const weight = (item as any).weight_kg || 0.5;
-        return sum + weight * item.quantity;
-      }, 0) + addOns.reduce((sum, item) => sum + item.weight_kg * item.quantity, 0);
-
-      // Create order with EXACT DB schema
-      const { data: order, error: orderError } = await supabase
-        .from("orders")
-        .insert({
-          user_id: user?.id || null,
-          guest_id: guestId,
-          email: user?.email || guestEmail || delivery.shippingPhone,
-          total_amount: total,
-          status: "pending",
-          
-          // Shipping fields
-          shipping_first_name: delivery.shippingFirstName || "",
-          shipping_last_name: delivery.shippingLastName,
-          shipping_address_line: delivery.shippingAddressLine,
-          shipping_apartment: delivery.shippingApartment || "",
-          shipping_city: delivery.shippingCity,
-          shipping_postal_code: delivery.shippingPostalCode || "",
-          shipping_phone: delivery.shippingPhone,
-          
-          // Billing fields
-          billing_first_name: sameAsDelivery ? delivery.shippingFirstName || "" : billing.billingFirstName || "",
-          billing_last_name: sameAsDelivery ? delivery.shippingLastName : billing.billingLastName,
-          billing_address_line: sameAsDelivery ? delivery.shippingAddressLine : billing.billingAddressLine,
-          billing_apartment: sameAsDelivery ? delivery.shippingApartment || "" : billing.billingApartment || "",
-          billing_city: sameAsDelivery ? delivery.shippingCity : billing.billingCity,
-          billing_postal_code: sameAsDelivery ? delivery.shippingPostalCode || "" : billing.billingPostalCode || "",
-          billing_phone: sameAsDelivery ? delivery.shippingPhone : billing.billingPhone,
-          
-          // Shipping provider (null if using hardcoded options)
-          shipping_provider_id: selectedShipping?.provider_id || null,
-          shipping_cost: selectedShipping?.price_lkr || 0,
-          estimated_delivery_min_days: selectedShipping?.estimated_days_min || null,
-          estimated_delivery_max_days: selectedShipping?.estimated_days_max || null,
-          total_weight: totalWeight,
-          
-          // Gift fields (only include if message exists)
-          sender_name: giftDetails.senderName || null,
-          sender_email: giftDetails.senderEmail || null,
-          sender_phone: giftDetails.senderPhone || null,
-          recipient_name: giftDetails.recipientName || null,
-          recipient_email: giftDetails.recipientEmail || null,
-          recipient_phone: giftDetails.recipientPhone || null,
-          occasion: giftDetails.occasion || null,
-          relationship: giftDetails.relationship || null,
-          occasion_date: giftDetails.occasionDate || null,
-          gift_message: giftMessage || null,
-          
-          // Payment
-          payment_method: "payhere",
-          payment_status: "pending",
-        })
-        .select()
-        .single();
-
-      if (orderError) throw orderError;
-
-      // Create order items (cart items)
-      const cartItems = cart.map((item) => ({
-        order_id: order.id,
-        product_id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        image: item.image,
-      }));
-
-      // Create order items (add-ons)
-      const addOnItems = addOns.map((item) => ({
-        order_id: order.id,
-        product_id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        image: item.image,
-        is_addon: true,
-      }));
-
-      const { error: itemsError } = await supabase
-        .from("order_items")
-        .insert([...cartItems, ...addOnItems]);
-
-      if (itemsError) throw itemsError;
-
-      const trackingResult = await createTrackingForOrder(supabase, order.id);
-      if ("error" in trackingResult) {
-        throw new Error(trackingResult.error);
+      if (!selectedShipping) {
+        throw new Error("Please select a shipping method.");
       }
 
-      const completedOrder = {
-        orderId: order.id as string,
-        trackingCode: trackingResult.trackingCode,
-        totalAmount: total,
+      const tempOrderId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? `pending_${crypto.randomUUID()}`
+          : `pending_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+      const pendingPayload: PendingPaymentData = {
+        tempOrderId,
+        cart,
+        addOns,
+        guestEmail: guestEmail.trim(),
+        userId: user?.id || null,
+        userEmail: user?.email || null,
+        delivery,
+        billing,
+        sameAsDelivery,
+        selectedShipping,
+        includeMessage,
+        giftDetails,
+        giftMessage,
+        subtotal,
+        addOnsTotal,
+        shippingCost,
+        total,
         itemCount:
           cart.reduce((sum, item) => sum + item.quantity, 0) +
           addOns.reduce((sum, item) => sum + item.quantity, 0),
+        createdAt: new Date().toISOString(),
       };
 
-      writeCart([]);
-      if (isGuest) {
-        await Swal.fire({
-          icon: "success",
-          title: "Order placed successfully",
-          html: `
-            <div style="text-align:left;line-height:1.6;font-size:14px">
-              <p><strong>Order ID:</strong><br/>${completedOrder.orderId}</p>
-              <p><strong>Tracking ID:</strong><br/>${completedOrder.trackingCode}</p>
-              <p><strong>Items:</strong> ${completedOrder.itemCount}</p>
-              <p><strong>Total:</strong> Rs. ${completedOrder.totalAmount.toLocaleString()}</p>
-              <p style="margin-top:10px;color:#4b5563;">Save both IDs to track your order later.</p>
-            </div>
-          `,
-          confirmButtonText: "Track Order",
-          confirmButtonColor: "#15803d",
-        });
-        router.push(`/track?tracking=${encodeURIComponent(completedOrder.trackingCode)}`);
-        return;
-      }
-
-      setOrderComplete(completedOrder);
+      writePendingPayment(pendingPayload);
+      router.push("/payment");
     } catch (err: any) {
       Swal.fire({
         icon: 'error',
-        title: 'Order Failed',
-        text: `Error creating order: ${err.message}`,
+        title: 'Unable to continue',
+        text: err.message || "We couldn't prepare your payment session.",
         confirmButtonColor: '#15803d',
       });
     } finally {
       setLoading(false);
     }
   };
-
-  if (orderComplete) {
-    const { trackingCode, orderId, totalAmount, itemCount } = orderComplete;
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6 py-16">
-        <div className="max-w-lg w-full bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center">
-          <div className="w-14 h-14 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-6">
-            <Check className="w-7 h-7 text-green-700" />
-          </div>
-          <h1 className="text-2xl md:text-3xl font-serif text-gray-900 mb-3">Thank you for your order</h1>
-          <p className="text-sm text-gray-500 mb-8 leading-relaxed">
-            We&apos;ve received your order. Save your Tracking ID — you&apos;ll need it to check status on the track page.
-          </p>
-          <div className="rounded-xl bg-gray-50 border border-gray-100 px-5 py-4 mb-8 text-left">
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400 mb-2">Your Order ID</p>
-            <p className="font-mono text-sm font-semibold text-gray-900 break-all mb-4">{orderId}</p>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400 mb-2">Your Tracking ID</p>
-            <p className="font-mono text-lg font-semibold text-gray-900 break-all">{trackingCode}</p>
-            <p className="text-xs text-gray-500 mt-4">
-              {itemCount} item(s) • Rs. {totalAmount.toLocaleString()}
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <button
-              type="button"
-              onClick={() => router.push(`/track?tracking=${encodeURIComponent(trackingCode)}`)}
-              className="inline-flex items-center justify-center gap-2 bg-green-700 text-white px-6 py-3 rounded-lg text-xs font-bold uppercase tracking-[0.15em] hover:bg-green-800 transition-colors"
-            >
-              <Truck className="w-4 h-4" />
-              Track order
-            </button>
-            <Link
-              href="/products"
-              className="inline-flex items-center justify-center px-6 py-3 rounded-lg text-xs font-bold uppercase tracking-[0.15em] border border-gray-200 text-gray-700 hover:border-gray-400 transition-colors"
-            >
-              Continue shopping
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (cart.length === 0) {
     return (
@@ -891,24 +767,24 @@ export default function CheckoutPage() {
               </div>
 
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
-                <p className="text-sm text-gray-700 font-medium">PayHere</p>
+                <p className="text-sm text-gray-700 font-medium">WebX Pay</p>
                 <p className="text-xs text-gray-500 mt-1">
-                  Secure payment with credit/debit card, bank transfer, or mobile wallet
+                  Pay Now opens a secure WebX Pay checkout. Your order is saved only after payment succeeds.
                 </p>
               </div>
 
               <button
-                onClick={handleSubmit}
+                onClick={handleProceedToPayment}
                 disabled={loading}
                 className="w-full bg-green-700 text-white py-4 rounded-lg text-sm font-bold tracking-wide uppercase hover:bg-green-800 transition-all flex items-center justify-center gap-3 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Processing..." : `Pay Now - Rs. ${total.toLocaleString()}`}
+                {loading ? "Redirecting..." : `Pay Now - Rs. ${total.toLocaleString()}`}
                 {!loading && <ChevronRight className="w-4 h-4" />}
               </button>
 
               <div className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-500">
                 <ShieldCheck className="w-4 h-4 text-green-600" />
-                Secure Payment Powered by PayHere
+                Secure Payment Powered by WebX
               </div>
             </section>
           </div>
