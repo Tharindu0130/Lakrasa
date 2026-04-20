@@ -198,7 +198,7 @@ function pickPaymentRedirectUrl(obj: Record<string, unknown>, nested: Record<str
 
 export async function initiateWebXHostedPayment(input: InitiateHostedPaymentInput): Promise<WebXInitiateResult> {
   const cfg = getWebXApiConfig();
-  const verifyUrl = `${cfg.appBaseUrl}/api/payment/verify`;
+  const verifyUrl = `${cfg.appBaseUrl}/payment`;
 
   let jwt = "";
   try {
