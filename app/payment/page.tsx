@@ -41,7 +41,7 @@ declare global {
 }
 
 const MPGS_SCRIPT_URL =
-  "https://cbcmpgs.gateway.mastercard.com/form/version/82/merchant/MPGS00000251/session.js";
+  "https://seylan.gateway.mastercard.com/form/version/82/merchant/MPGS00000251/session.js";
 const LOCAL_WRAPPER_URL = "/webxpay.hostedsession.js?v=3";
 
 type FieldErrors = {
@@ -89,39 +89,15 @@ function extractHtml3dsUrl(data: unknown): string | null {
   return null;
 }
 
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
-    if (existing) {
-      if (existing.dataset.loaded === "true") return resolve();
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error(`Failed loading ${src}`)), { once: true });
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.onload = () => {
-      script.dataset.loaded = "true";
-      resolve();
-    };
-    script.onerror = () => reject(new Error(`Failed loading ${src}`));
-    document.head.appendChild(script);
-  });
-}
-
 export default function PaymentPage() {
   const router = useRouter();
   const [pending, setPending] = useState<PendingPaymentData | null>(null);
-  const [scriptsReady, setScriptsReady] = useState(false);
-  const [initializing, setInitializing] = useState(true);
-  const [processing, setProcessing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  const generateSessionRef = useRef<GenerateSessionFn | null>(null);
-  const initOnceRef = useRef(false);
-  const initTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const generateSessionRef = useRef<any>(null);
+  const isInitialized = useRef(false);
 
   const customerEmail = useMemo(
     () => (pending ? (pending.userEmail || pending.guestEmail || "").trim() : ""),
@@ -200,20 +176,29 @@ export default function PaymentPage() {
     void process3DSResult();
   }, [process3DSResult]);
 
+  // MPGS Initialization - matching your working component exactly
   useEffect(() => {
-    if (initOnceRef.current) return;
-    initOnceRef.current = true;
+    if (isInitialized.current) return;
 
-    let cancelled = false;
-    (async () => {
+    const loadScript = (src: string) =>
+      new Promise<void>((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`Failed to load ${src}`));
+        document.body.appendChild(script);
+      });
+
+    const init = async () => {
       try {
-        setInitializing(true);
         await loadScript(MPGS_SCRIPT_URL);
         await loadScript(LOCAL_WRAPPER_URL);
-        if (cancelled) return;
+
         if (!window.WebxpayTokenizeInit) {
-          throw new Error("Hosted session wrapper failed to load.");
+          throw new Error("WebxpayTokenizeInit not found");
         }
+
         window.WebxpayTokenizeInit({
           card: {
             number: "#card-number",
@@ -222,55 +207,53 @@ export default function PaymentPage() {
             expiryYear: "#expiry-year",
             nameOnCard: "#cardholder-name",
           },
-          ready: (generateSession) => {
-            if (initTimerRef.current) {
-              clearTimeout(initTimerRef.current);
-              initTimerRef.current = null;
-            }
-            generateSessionRef.current = generateSession;
-            setScriptsReady(true);
-            setInitializing(false);
+          ready: (GenerateSession: any) => {
+            generateSessionRef.current = GenerateSession;
+            isInitialized.current = true;
           },
         });
-        initTimerRef.current = setTimeout(() => {
-          if (generateSessionRef.current) return;
-          setInitializing(false);
-          setInlineError(
-            "Secure card fields could not initialize. Please refresh and check that MPGS session.js is reachable."
-          );
-        }, 12000);
       } catch (error) {
-        setInitializing(false);
-        setInlineError(error instanceof Error ? error.message : "Could not initialize secure payment fields.");
+        console.error("Init error:", error);
+        setInlineError("Failed to load payment gateway. Please refresh the page.");
       }
-    })();
-
-    return () => {
-      if (initTimerRef.current) {
-        clearTimeout(initTimerRef.current);
-        initTimerRef.current = null;
-      }
-      cancelled = true;
     };
+
+    init();
   }, []);
+
+  const handleErrors = (error: any) => {
+    const newErrors: FieldErrors = {};
+
+    if (error.type === "fields_in_error") {
+      if (error.details?.cardNumber) newErrors.cardNumber = "Invalid card number";
+      if (error.details?.expiryMonth || error.details?.expiryYear)
+        newErrors.expiry = "Invalid expiry";
+      if (error.details?.securityCode) newErrors.cvv = "Invalid CVV";
+    } else {
+      setInlineError(error.details || "System error");
+    }
+
+    setFieldErrors(newErrors);
+  };
 
   const submitPayment = async () => {
     if (!pending) return;
     if (!generateSessionRef.current) {
-      setInlineError("Payment fields are not ready yet.");
+      setInlineError("Payment system not ready. Please wait.");
       return;
     }
 
-    setProcessing(true);
+    setIsSaving(true);
     setInlineError(null);
     setFieldErrors({});
 
     generateSessionRef.current(
-      async (sessionId) => {
+      async (sessionId: string) => {
         try {
           if (!sessionId) {
             throw new Error("No secure card session generated.");
           }
+          
           const res = await fetch("/api/payment/initiate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -288,6 +271,7 @@ export default function PaymentPage() {
           });
 
           const json = (await res.json().catch(() => ({}))) as InitiateResponse;
+          
           if (!res.ok || !json.success || !json.order_id) {
             const base = json.error || "Payment initiation failed.";
             const suffix = json.hint ? ` ${json.hint}` : json.requestUrl ? ` URL: ${json.requestUrl}` : "";
@@ -296,6 +280,7 @@ export default function PaymentPage() {
           }
 
           const html3dsUrl = json.html3ds_url || json.payment_url || extractHtml3dsUrl(json.data);
+          
           if (!html3dsUrl) {
             throw new Error("WebX did not return a 3DS redirect URL.");
           }
@@ -307,22 +292,17 @@ export default function PaymentPage() {
             order_number: json.orderNumber,
           });
 
-          window.location.assign(html3dsUrl);
+          // Redirect to 3DS URL
+          window.location.href = html3dsUrl;
         } catch (error) {
           const message = error instanceof Error ? error.message : "Payment request failed.";
           setInlineError(message);
-          setProcessing(false);
+          setIsSaving(false);
         }
       },
-      (error) => {
-        const fields = error.fields || {};
-        setFieldErrors({
-          cardNumber: fields.number || fields.cardNumber,
-          expiry: fields.expiryMonth || fields.expiryYear || fields.expiry,
-          cvv: fields.securityCode || fields.cvv,
-        });
-        setInlineError(mapGatewayError(error));
-        setProcessing(false);
+      (error: any) => {
+        setIsSaving(false);
+        handleErrors(error);
       }
     );
   };
@@ -374,83 +354,92 @@ export default function PaymentPage() {
 
           <div className="space-y-4">
             <div>
-              <label htmlFor="cardholder-name" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-600">
-                Cardholder Name
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Card Holder Name
               </label>
               <input
                 id="cardholder-name"
                 readOnly
-                className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm outline-none"
-                placeholder="Name on card"
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none"
+                placeholder="John Doe"
               />
             </div>
 
             <div>
-              <label htmlFor="card-number" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-600">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
                 Card Number
               </label>
               <input
                 id="card-number"
                 readOnly
-                className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm outline-none"
-                placeholder="Card number"
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none"
+                placeholder="1234 5678 9012 3456"
               />
-              {fieldErrors.cardNumber ? <p className="mt-1 text-xs text-red-600">{fieldErrors.cardNumber}</p> : null}
+              {fieldErrors.cardNumber && (
+                <span className="text-red-500 text-xs mt-1 block">{fieldErrors.cardNumber}</span>
+              )}
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label htmlFor="expiry-month" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  Month
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Expiry Date
                 </label>
-                <input
-                  id="expiry-month"
-                  readOnly
-                  className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm outline-none"
-                  placeholder="MM"
-                />
+                <div className="flex gap-2">
+                  <input
+                    id="expiry-month"
+                    readOnly
+                    placeholder="MM"
+                    className="w-1/2 p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-center"
+                  />
+                  <input
+                    id="expiry-year"
+                    readOnly
+                    placeholder="YY"
+                    className="w-1/2 p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-center"
+                  />
+                </div>
+                {fieldErrors.expiry && (
+                  <span className="text-red-500 text-xs mt-1 block">{fieldErrors.expiry}</span>
+                )}
               </div>
+
               <div>
-                <label htmlFor="expiry-year" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  Year
-                </label>
-                <input
-                  id="expiry-year"
-                  readOnly
-                  className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm outline-none"
-                  placeholder="YY"
-                />
-              </div>
-              <div>
-                <label htmlFor="security-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-600">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
                   CVV
                 </label>
                 <input
                   id="security-code"
                   readOnly
-                  className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm outline-none"
-                  placeholder="CVV"
+                  placeholder="123"
+                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-center"
                 />
+                {fieldErrors.cvv && (
+                  <span className="text-red-500 text-xs mt-1 block">{fieldErrors.cvv}</span>
+                )}
               </div>
             </div>
-            {fieldErrors.expiry ? <p className="text-xs text-red-600">{fieldErrors.expiry}</p> : null}
-            {fieldErrors.cvv ? <p className="text-xs text-red-600">{fieldErrors.cvv}</p> : null}
           </div>
 
-          {inlineError ? (
-            <div className="mt-5 rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {inlineError}
+          {inlineError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 mt-4">
+              <p className="text-red-600 text-xs text-center">{inlineError}</p>
             </div>
-          ) : null}
+          )}
 
           <button
-            type="button"
             onClick={submitPayment}
-            disabled={processing || initializing || !scriptsReady}
-            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-green-700 px-6 py-3.5 text-sm font-bold uppercase tracking-[0.15em] text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isSaving}
+            className="w-full bg-gradient-to-r from-green-700 to-green-600 hover:from-green-800 hover:to-green-700 text-white font-bold py-3 rounded-xl shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed mt-6 flex items-center justify-center gap-2"
           >
-            {(processing || initializing) && <Loader2 className="h-4 w-4 animate-spin" />}
-            {processing ? "Processing..." : initializing ? "Initializing..." : "Pay Now"}
+            {isSaving ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Processing...
+              </>
+            ) : (
+              "Pay Now"
+            )}
           </button>
 
           <div className="mt-4 flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">

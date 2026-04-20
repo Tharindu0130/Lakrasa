@@ -72,7 +72,7 @@ export default function ProductsPage() {
       });
 
       setProducts(mapped);
-      
+
       // Calculate max price in catalog
       if (mapped.length > 0) {
         const highest = Math.max(...mapped.map(p => p.priceLkr));
